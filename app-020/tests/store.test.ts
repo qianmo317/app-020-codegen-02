@@ -21,6 +21,11 @@ import {
   deleteFacility,
   addCheck,
   deleteCheck,
+  addService,
+  deleteService,
+  updateFacility,
+  setExpectedCount,
+  seedExpectedCountsFromMap,
   updateRules,
   resetRules,
   setMark,
@@ -152,6 +157,48 @@ describe('设施：编号、exits 同步、拖动、检查记录', () => {
     expect(checks().map((c) => c.date)).toEqual(['2026-09-01', '2026-09-16']);
     deleteCheck(fid, xid, 0);
     expect(checks().map((c) => c.date)).toEqual(['2026-09-16']);
+  });
+
+  it('S11 维保履历：出厂日期、维修/换新记录（费用三件套+配件号）写入并保持引用更新', () => {
+    const xid = addFacility(fid, 'extinguisher', 20000, 1000);
+    updateFacility(fid, xid, { manufactureDate: '2016-03-01' });
+    const f0 = snap().floors[fid];
+    expect(f0.facilities.find((x) => x.id === xid)!.manufactureDate).toBe('2016-03-01');
+    const sid = addService(fid, xid, {
+      date: '2026-03-10',
+      type: 'maintenance',
+      cost: { material: 80, labor: 40, transport: 15 },
+      parts: [{ name: '压力表', partNo: 'PG-M10-1.6', qty: 1 }],
+      vendor: '安盾消防',
+    });
+    const f1 = snap().floors[fid];
+    expect(f1).not.toBe(f0);
+    const fac1 = f1.facilities.find((x) => x.id === xid)!;
+    expect(fac1.services).toHaveLength(1);
+    expect(fac1.services![0].id).toBe(sid);
+    expect(fac1.services![0].cost).toEqual({ material: 80, labor: 40, transport: 15 });
+    expect(fac1.services![0].parts![0].partNo).toBe('PG-M10-1.6');
+    addService(fid, xid, {
+      date: '2026-08-01',
+      type: 'replacement',
+      cost: { material: 220, labor: 30, transport: 20 },
+      newManufactureDate: '2026-07-20',
+    });
+    expect(snap().floors[fid].facilities.find((x) => x.id === xid)!.services).toHaveLength(2);
+    deleteService(fid, xid, sid);
+    expect(snap().floors[fid].facilities.find((x) => x.id === xid)!.services!.map((s) => s.id)).not.toContain(sid);
+  });
+
+  it('S12 账面数量：手工登记与「按图建账」；置 null 表示删除该类型登记', () => {
+    addFacility(fid, 'extinguisher', 1000, 1000);
+    addFacility(fid, 'extinguisher', 2000, 1000);
+    addFacility(fid, 'hydrant', 3000, 1000);
+    setExpectedCount(fid, 'extinguisher', 3);
+    expect(snap().floors[fid].expectedCounts).toEqual({ extinguisher: 3 });
+    setExpectedCount(fid, 'extinguisher', null);
+    expect(snap().floors[fid].expectedCounts).toEqual({});
+    seedExpectedCountsFromMap(fid);
+    expect(snap().floors[fid].expectedCounts).toEqual({ extinguisher: 2, hydrant: 1 });
   });
 });
 

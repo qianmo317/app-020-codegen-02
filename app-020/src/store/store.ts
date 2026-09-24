@@ -10,6 +10,7 @@ import type {
   Room,
   RoomUsage,
   RuleSet,
+  ServiceRecord,
   ValidationResult,
 } from '../model';
 import { DEFAULT_RULES } from '../rules/defaults';
@@ -33,6 +34,12 @@ function loadState(): AppState {
       const s = JSON.parse(raw) as Partial<AppState>;
       // 缺失的节用默认值补齐（如旧版本数据没有 rules/marks），而不是整体丢弃用户数据
       if (s && Array.isArray(s.buildings) && s.floors) {
+        // 旧版本设施没有 services/expectedCounts 字段，逐对象补齐而不是要求用户清数据
+        for (const f of Object.values(s.floors)) {
+          for (const fac of f.facilities) {
+            if (!Array.isArray(fac.services)) fac.services = [];
+          }
+        }
         return {
           buildings: s.buildings,
           floors: s.floors,
@@ -225,11 +232,16 @@ export function moveFacility(floorId: string, facilityId: string, x: number, y: 
   });
 }
 
-export function updateFacility(floorId: string, facilityId: string, patch: Partial<Pick<Facility, 'spec'>>) {
+export function updateFacility(
+  floorId: string,
+  facilityId: string,
+  patch: Partial<Pick<Facility, 'spec' | 'manufactureDate'>>,
+) {
   updateFloor(floorId, (f) => {
     const fac = f.facilities.find((x) => x.id === facilityId);
-    if (fac && patch.spec) {
-      fac.spec = patch.spec;
+    if (fac) {
+      if (patch.spec) fac.spec = patch.spec;
+      if ('manufactureDate' in patch) fac.manufactureDate = patch.manufactureDate;
       f.version++;
     }
   });
@@ -260,6 +272,57 @@ export function deleteCheck(floorId: string, facilityId: string, index: number) 
       fac.checks.splice(index, 1);
       f.version++;
     }
+  });
+}
+
+// ---------- 维修 / 送检 / 换新履历（含费用与配件号） ----------
+
+export function addService(floorId: string, facilityId: string, service: Omit<ServiceRecord, 'id'>): string {
+  const id = uid();
+  updateFloor(floorId, (f) => {
+    const fac = f.facilities.find((x) => x.id === facilityId);
+    if (fac) {
+      if (!Array.isArray(fac.services)) fac.services = [];
+      fac.services.push({ ...service, id });
+      // 换新登记的新出厂日期即此后年限计算起点（判定函数按时间取最近一次）
+      f.version++;
+    }
+  });
+  return id;
+}
+
+export function deleteService(floorId: string, facilityId: string, serviceId: string) {
+  updateFloor(floorId, (f) => {
+    const fac = f.facilities.find((x) => x.id === facilityId);
+    if (fac?.services) {
+      fac.services = fac.services.filter((x) => x.id !== serviceId);
+      f.version++;
+    }
+  });
+}
+
+// ---------- 账面在册数量（账实对账） ----------
+
+export function setExpectedCount(floorId: string, kind: FacilityKind, count: number | null) {
+  updateFloor(floorId, (f) => {
+    const next = { ...(f.expectedCounts ?? {}) };
+    if (count === null || Number.isNaN(count) || count < 0) delete next[kind];
+    else next[kind] = Math.round(count);
+    f.expectedCounts = next;
+    f.version++;
+  });
+}
+
+/** 以图上当前实布数量建立/补齐账面台账（只填空项，不覆盖已登记数字） */
+export function seedExpectedCountsFromMap(floorId: string) {
+  updateFloor(floorId, (f) => {
+    const next = { ...(f.expectedCounts ?? {}) };
+    for (const fac of f.facilities) {
+      if (next[fac.kind] == null) next[fac.kind] = 0;
+      next[fac.kind]!++;
+    }
+    f.expectedCounts = next;
+    f.version++;
   });
 }
 
@@ -337,15 +400,56 @@ export function loadDemo(): string {
     }
     const facilities: Facility[] = [];
     const dateStr = (daysAgo: number) => new Date(Date.now() - daysAgo * 86400000).toISOString().slice(0, 10);
-    const mkF = (kind: FacilityKind, x: number, y: number, code: string, checks: Facility['checks'] = [], spec?: Facility['spec']) => {
-      facilities.push({ id: uid(), kind, x: x * M, y: y * M, code, checks, spec });
+    /** 距今 n 年前的日期（默认 1 月 1 日出厂，便于核对年限） */
+    const yearsAgo = (n: number, monthDay = '-01-01') => `${new Date().getFullYear() - n}${monthDay}`;
+    const mkF = (
+      kind: FacilityKind,
+      x: number,
+      y: number,
+      code: string,
+      checks: Facility['checks'] = [],
+      spec?: Facility['spec'],
+      extra?: Pick<Facility, 'manufactureDate' | 'services'>,
+    ) => {
+      facilities.push({ id: uid(), kind, x: x * M, y: y * M, code, checks, spec, ...extra });
     };
+    const thisYear = new Date().getFullYear();
     mkF('exit', 0.5, 1, '1F-EXIT-01');
     mkF('exit', 40.5, 1, '1F-EXIT-02');
-    mkF('extinguisher', 20.5, 1, '1F-EX-01', [{ date: dateStr(20), status: 'ok' }], { extType: 'dry_powder', weightKg: 4 });
-    mkF('extinguisher', 4, 5, '1F-EX-02', [{ date: dateStr(45), status: 'ok' }], { extType: 'dry_powder', weightKg: 4 });
-    mkF('extinguisher', 36, 5, '1F-EX-03', [], { extType: 'co2', weightKg: 2 });
-    mkF('hydrant', 10, 1, '1F-HY-01', [{ date: dateStr(10), status: 'ok' }]);
+    // 干粉 4kg：出厂 3 年，今年 Q1 做过一次维修（换压力表），未到试压/报废
+    mkF(
+      'extinguisher', 20.5, 1, '1F-EX-01',
+      [{ date: dateStr(20), status: 'ok', pressureMpa: 1.2, appearance: 'intact', seal: 'intact' }],
+      { extType: 'dry_powder', weightKg: 4 },
+      {
+        manufactureDate: yearsAgo(3),
+        services: [
+          {
+            id: uid(),
+            date: `${thisYear}-02-12`,
+            type: 'maintenance',
+            cost: { material: 35, labor: 20, transport: 0 },
+            parts: [{ name: '压力表', partNo: 'PG-M10-1.6', qty: 1 }],
+            vendor: '安盾消防器材经营部',
+            note: '例行维修更换压力表',
+          },
+        ],
+      },
+    );
+    // 干粉 4kg：出厂 10 年 → 已到报废年限，待办里应提示「换新」
+    mkF(
+      'extinguisher', 4, 5, '1F-EX-02',
+      [{ date: dateStr(45), status: 'ok', pressureMpa: 1.1, appearance: 'rust', seal: 'intact' }],
+      { extType: 'dry_powder', weightKg: 4 },
+      { manufactureDate: yearsAgo(10) },
+    );
+    // CO2 2kg：出厂 6 年且从未试压（周期 5 年）→ 待办里应提示「送检」
+    mkF(
+      'extinguisher', 36, 5, '1F-EX-03', [],
+      { extType: 'co2', weightKg: 2 },
+      { manufactureDate: yearsAgo(6) },
+    );
+    mkF('hydrant', 10, 1, '1F-HY-01', [{ date: dateStr(10), status: 'ok', appearance: 'intact', seal: 'intact' }]);
     mkF('exit_sign', 1, 1.7, '1F-ES-01', [{ date: dateStr(15), status: 'ok' }]);
     mkF('exit_sign', 40, 1.7, '1F-ES-02', [{ date: dateStr(15), status: 'ok' }]);
     mkF('emergency_light', 20.5, 0.4, '1F-EL-01', [{ date: dateStr(15), status: 'ok' }]);
@@ -358,6 +462,8 @@ export function loadDemo(): string {
       rooms,
       facilities,
       exits,
+      // 账面台账：灭火器应为 4 具（图上只有 3 具 → 差 1 具），消火栓 2 个（图上 1 个 → 差 1 个）
+      expectedCounts: { extinguisher: 4, hydrant: 2 },
       version: 0,
     };
   });

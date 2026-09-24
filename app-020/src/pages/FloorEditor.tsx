@@ -1,12 +1,29 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Facility, Pt, Room, RoomUsage } from '../model';
-import { USAGE_LABELS, FACILITY_LABELS } from '../model';
-import { addRoom, addFacility, deleteFacility, deleteRoom, moveFacility, moveRoom, updateRoom, updateFacility, setUnderlay, setLastValidation, useStore, addCheck, deleteCheck } from '../store/store';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type {
+  AppearanceStatus,
+  Facility,
+  Pt,
+  ReplacedPart,
+  Room,
+  RoomUsage,
+  SealStatus,
+  ServiceType,
+} from '../model';
+import {
+  APPEARANCE_LABELS,
+  CHECK_STATUS_LABELS,
+  SEAL_LABELS,
+  SERVICE_TYPE_LABELS,
+  USAGE_LABELS,
+  FACILITY_LABELS,
+} from '../model';
+import { addRoom, addFacility, deleteFacility, deleteRoom, moveFacility, moveRoom, updateRoom, updateFacility, setUnderlay, setLastValidation, useStore, addCheck, deleteCheck, addService, deleteService } from '../store/store';
 import { floorLabel } from '../store/id';
 import { getBlob, putBlob, compressImage } from '../store/db';
 import { uid } from '../store/id';
 import { bboxOf } from '../lib/geometry';
 import { computeCoverage, validateFloor } from '../lib/engine';
+import { extinguisherLife, facilityTimeline } from '../lib/maintenance';
 import { FloorPlan, mmFromEvent, wheelZoom, type DragState, type Selection, type Tool, type View } from '../components/FloorPlan';
 import { FacilityGlyph, USAGE_FILLS } from '../components/symbols';
 
@@ -419,10 +436,38 @@ export function FloorEditor({ floorId }: Props) {
 }
 
 function FacilityInspector({ floorId, fac, onDelete }: { floorId: string; fac: Facility; onDelete: () => void }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const now = Date.now();
+
+  // ---------- 检查表单 ----------
+  const [date, setDate] = useState(today);
+  const [status, setStatus] = useState<'ok' | 'low_pressure' | 'expired' | 'damaged' | 'missing'>('ok');
+  const [pressureMpa, setPressureMpa] = useState('');
+  const [appearance, setAppearance] = useState<AppearanceStatus>('intact');
+  const [seal, setSeal] = useState<SealStatus>('intact');
   const [note, setNote] = useState('');
-  const [photoUrls, setPhotoUrls] = useState<Record<number, string>>({});
   const photoInput = useRef<HTMLInputElement | null>(null);
 
+  // ---------- 维保表单 ----------
+  const [svcDate, setSvcDate] = useState(today);
+  const [svcType, setSvcType] = useState<ServiceType>('maintenance');
+  const [material, setMaterial] = useState('');
+  const [labor, setLabor] = useState('');
+  const [transport, setTransport] = useState('');
+  const [vendor, setVendor] = useState('');
+  const [reportNo, setReportNo] = useState('');
+  const [newMfg, setNewMfg] = useState('');
+  const [partName, setPartName] = useState('');
+  const [partNo, setPartNo] = useState('');
+  const [parts, setParts] = useState<ReplacedPart[]>([]);
+  const [svcNote, setSvcNote] = useState('');
+  const [showSvc, setShowSvc] = useState(false);
+
+  const life = fac.kind === 'extinguisher' ? extinguisherLife(fac, now) : null;
+  const timeline = useMemo(() => facilityTimeline(fac), [fac]);
+
+  // 履历中照片按 ServiceRecord/检查定位不便于索引，这里直接按 fac.checks 的下标加载
+  const [photoUrls, setPhotoUrls] = useState<Record<number, string>>({});
   useEffect(() => {
     let cancelled = false;
     const urls: Record<number, string> = {};
@@ -441,9 +486,11 @@ function FacilityInspector({ floorId, fac, onDelete }: { floorId: string; fac: F
     };
   }, [fac.checks]);
 
-  const today = new Date().toISOString().slice(0, 10);
-  const [date, setDate] = useState(today);
-  const [status, setStatus] = useState<'ok' | 'low_pressure' | 'expired' | 'damaged' | 'missing'>('ok');
+  const photoUrlByKey = (key?: string) => {
+    if (!key) return undefined;
+    const idx = fac.checks.findIndex((c) => c.photoKey === key);
+    return idx >= 0 ? photoUrls[idx] : undefined;
+  };
 
   const submitCheck = async () => {
     let photoKey: string | undefined;
@@ -453,9 +500,49 @@ function FacilityInspector({ floorId, fac, onDelete }: { floorId: string; fac: F
       photoKey = `photo/${uid()}`;
       await putBlob(photoKey, blob);
     }
-    addCheck(floorId, fac.id, { date, status, note: note || undefined, photoKey });
+    addCheck(floorId, fac.id, {
+      date,
+      status,
+      pressureMpa: pressureMpa === '' ? undefined : Number(pressureMpa),
+      appearance,
+      seal,
+      note: note || undefined,
+      photoKey,
+    });
     setNote('');
+    setPressureMpa('');
     if (photoInput.current) photoInput.current.value = '';
+  };
+
+  const num = (s: string) => (s === '' ? 0 : Number(s) || 0);
+
+  const addPart = () => {
+    if (!partName.trim()) return;
+    setParts([...parts, { name: partName.trim(), partNo: partNo.trim() || undefined, qty: 1 }]);
+    setPartName('');
+    setPartNo('');
+  };
+
+  const submitService = () => {
+    addService(floorId, fac.id, {
+      date: svcDate,
+      type: svcType,
+      cost: { material: num(material), labor: num(labor), transport: num(transport) },
+      parts: parts.length ? parts : undefined,
+      vendor: vendor.trim() || undefined,
+      reportNo: reportNo.trim() || undefined,
+      newManufactureDate: svcType === 'replacement' && newMfg ? newMfg : undefined,
+      note: svcNote.trim() || undefined,
+    });
+    setShowSvc(false);
+    setMaterial('');
+    setLabor('');
+    setTransport('');
+    setVendor('');
+    setReportNo('');
+    setNewMfg('');
+    setParts([]);
+    setSvcNote('');
   };
 
   return (
@@ -481,40 +568,146 @@ function FacilityInspector({ floorId, fac, onDelete }: { floorId: string; fac: F
               onChange={(e) => updateFacility(floorId, fac.id, { spec: { ...fac.spec, weightKg: Number(e.target.value) } })}
             />
           </label>
+          <label className="row">出厂日期
+            <input
+              type="date"
+              value={fac.manufactureDate ?? ''}
+              onChange={(e) => updateFacility(floorId, fac.id, { manufactureDate: e.target.value || undefined })}
+            />
+          </label>
+          {life && (
+            <div className={`lifecard ${life.scrapOverdue || life.hydroOverdue ? 'life-bad' : life.scrapSoon || life.hydroSoon ? 'life-soon' : 'life-ok'}`}>
+              {!life.basisDate ? (
+                <span className="bad">未登记出厂日期，无法判定年限</span>
+              ) : (
+                <>
+                  <div>寿命起点：{life.basisDate}</div>
+                  <div>
+                    下次水压试验：<b>{life.hydroDueDate ?? '报废前无需再试'}</b>
+                    {life.hydroOverdue && <span className="badge act-hydro">已逾期·送检</span>}
+                    {!life.hydroOverdue && life.hydroSoon && <span className="badge act-hydro">临近·送检</span>}
+                    <span className="hint">（每 {life.hydroIntervalYears} 年，上次 {life.lastHydroDate ?? '未送检'}）</span>
+                  </div>
+                  <div>
+                    报废日期：<b>{life.scrapDate}</b>
+                    {life.scrapOverdue && <span className="badge act-replace">已到期·换新</span>}
+                    {!life.scrapOverdue && life.scrapSoon && <span className="badge act-replace">临近·换新</span>}
+                    <span className="hint">（{life.scrapYears} 年）</span>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </>
       )}
-      <h4>检查记录</h4>
+
+      {/* 履历时间线（检查 + 维保按时间倒序） */}
+      <h4>履历（检查 / 维保）</h4>
       <div className="checks">
-        {[...fac.checks]
-          .sort((a, b) => b.date.localeCompare(a.date))
-          .map((c) => {
-            const realIdx = fac.checks.indexOf(c);
-            return (
-              <div key={realIdx} className="checkrow">
-                <span>{c.date}</span>
-                <span className={`badge st-${c.status}`}>{c.status}</span>
-                {c.note && <span className="hint">{c.note}</span>}
-                {photoUrls[realIdx] && <img className="thumb" src={photoUrls[realIdx]} alt="检查照片" />}
-                <button className="ghost" onClick={() => deleteCheck(floorId, fac.id, realIdx)}>删</button>
-              </div>
-            );
-          })}
-        {!fac.checks.length && <p className="hint">暂无记录</p>}
+        {timeline.map((e) =>
+          e.kind === 'check' ? (
+            <div key={`c-${e.date}-${e.status}-${e.note ?? ''}`} className="checkrow tl-check">
+              <span>{e.date}</span>
+              <span className="badge st-ok">检</span>
+              <span className={`badge st-${e.status}`}>{CHECK_STATUS_LABELS[e.status as keyof typeof CHECK_STATUS_LABELS] ?? e.status}</span>
+              {e.pressureMpa != null && <span className="hint">{e.pressureMpa}MPa</span>}
+              {e.appearance && e.appearance !== 'intact' && <span className="hint">外观:{APPEARANCE_LABELS[e.appearance as AppearanceStatus]}</span>}
+              {e.seal && e.seal !== 'intact' && <span className="bad">铅封:{SEAL_LABELS[e.seal as SealStatus]}</span>}
+              {e.note && <span className="hint">{e.note}</span>}
+              {(() => {
+                const u = photoUrlByKey(e.photoKey);
+                return u ? <img className="thumb" src={u} alt="检查照片" /> : null;
+              })()}
+              <button className="ghost" onClick={() => deleteCheck(floorId, fac.id, e.checkIndex)}>删</button>
+            </div>
+          ) : (
+            <div key={e.ref.id} className="checkrow tl-service">
+              <span>{e.date}</span>
+              <span className={`badge svc-${e.serviceType}`}>{SERVICE_TYPE_LABELS[e.serviceType]}</span>
+              <span className="hint">¥{e.totalCost.toFixed(2)}</span>
+              {e.parts.map((p) => (
+                <span key={`${p.name}-${p.partNo ?? ''}`} className="tag" title="已更换配件（含配件号）">
+                  {p.name}{p.partNo ? ` ${p.partNo}` : ''}
+                </span>
+              ))}
+              {e.reportNo && <span className="hint">报告号 {e.reportNo}</span>}
+              {e.newManufactureDate && <span className="good">新具出厂 {e.newManufactureDate}</span>}
+              {e.vendor && <span className="hint">{e.vendor}</span>}
+              {e.note && <span className="hint">{e.note}</span>}
+              <button className="ghost" onClick={() => deleteService(floorId, fac.id, e.ref.id)}>删</button>
+            </div>
+          ),
+        )}
+        {!timeline.length && <p className="hint">暂无记录</p>}
       </div>
+
+      {/* 登记检查：压力 / 外观 / 铅封 / 照片 */}
       <div className="stack">
+        <h4>登记检查</h4>
         <label className="row">日期 <input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
         <label className="row">状态
           <select value={status} onChange={(e) => setStatus(e.target.value as typeof status)}>
-            <option value="ok">正常</option>
-            <option value="low_pressure">压力不足</option>
-            <option value="expired">过期</option>
-            <option value="damaged">损坏</option>
-            <option value="missing">缺失</option>
+            {Object.entries(CHECK_STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+        </label>
+        <label className="row">压力表读数 (MPa)
+          <input type="number" step="0.01" min={0} placeholder="无压力表留空" value={pressureMpa} onChange={(e) => setPressureMpa(e.target.value)} />
+        </label>
+        <label className="row">外观
+          <select value={appearance} onChange={(e) => setAppearance(e.target.value as AppearanceStatus)}>
+            {Object.entries(APPEARANCE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+        </label>
+        <label className="row">铅封
+          <select value={seal} onChange={(e) => setSeal(e.target.value as SealStatus)}>
+            {Object.entries(SEAL_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
         </label>
         <label className="row">备注 <input value={note} onChange={(e) => setNote(e.target.value)} /></label>
-        <label className="row">照片 <input ref={photoInput} type="file" accept="image/*" /></label>
+        <label className="row">照片 <input ref={photoInput} type="file" accept="image/*" capture="environment" /></label>
         <button onClick={submitCheck}>登记检查</button>
+      </div>
+
+      {/* 登记维修 / 送检 / 换新（费用：材料、人工、运输；换配件留配件号） */}
+      <div className="stack">
+        {!showSvc ? (
+          <button onClick={() => setShowSvc(true)}>登记维修 / 送检 / 换新</button>
+        ) : (
+          <>
+            <h4>维保作业</h4>
+            <label className="row">日期 <input type="date" value={svcDate} onChange={(e) => setSvcDate(e.target.value)} /></label>
+            <label className="row">类型
+              <select value={svcType} onChange={(e) => setSvcType(e.target.value as ServiceType)}>
+                {Object.entries(SERVICE_TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
+            </label>
+            <label className="row">材料费 (元) <input type="number" min={0} step="0.01" value={material} onChange={(e) => setMaterial(e.target.value)} /></label>
+            <label className="row">人工费 (元) <input type="number" min={0} step="0.01" value={labor} onChange={(e) => setLabor(e.target.value)} /></label>
+            <label className="row">运输费 (元) <input type="number" min={0} step="0.01" value={transport} onChange={(e) => setTransport(e.target.value)} /></label>
+            <label className="row">承修/送检单位 <input value={vendor} onChange={(e) => setVendor(e.target.value)} /></label>
+            <label className="row">报告/证书号 <input value={reportNo} onChange={(e) => setReportNo(e.target.value)} /></label>
+            {svcType === 'replacement' && (
+              <label className="row">新具出厂日期 <input type="date" value={newMfg} onChange={(e) => setNewMfg(e.target.value)} /></label>
+            )}
+            <div className="stack">
+              <span className="hint">更换的配件（留下配件号）：</span>
+              {parts.map((p, i) => (
+                <span key={i} className="row">
+                  <span className="tag">{p.name}{p.partNo ? ` ${p.partNo}` : ''}</span>
+                  <button className="ghost" onClick={() => setParts(parts.filter((_, j) => j !== i))}>移除</button>
+                </span>
+              ))}
+              <label className="row">配件名称 <input value={partName} onChange={(e) => setPartName(e.target.value)} placeholder="如 压力表" /></label>
+              <label className="row">配件号/型号 <input value={partNo} onChange={(e) => setPartNo(e.target.value)} placeholder="如 PG-M10-1.6" /></label>
+              <button onClick={addPart}>添加配件</button>
+            </div>
+            <label className="row">备注 <input value={svcNote} onChange={(e) => setSvcNote(e.target.value)} /></label>
+            <div className="toolbar">
+              <button onClick={submitService}>保存维保记录</button>
+              <button className="ghost" onClick={() => setShowSvc(false)}>取消</button>
+            </div>
+          </>
+        )}
       </div>
       <button className="danger" onClick={onDelete}>删除设施</button>
     </section>

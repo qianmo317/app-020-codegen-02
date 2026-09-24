@@ -109,3 +109,62 @@ describe('整改清单（validateFloor）', () => {
     expect(r.pass).toBe(false);
   });
 });
+
+describe('灭火器年限进入楼层校验（维保账）', () => {
+  const yearsAgo = (n: number) => `${new Date().getFullYear() - n}-01-01`;
+
+  it('L8 到报废年限 → LIFE_SCRAP_OVERDUE（error，须换新）；试压逾期 → LIFE_HYDRO_OVERDUE（error，须送检）', () => {
+    const { floor, rules } = mkFloor([mkRoom('走道', 'corridor', rect(0, 0, 40, 2))], [
+      { kind: 'exit', x: 0.5, y: 1, checks: [{ date: dateStr(1), status: 'ok' }] },
+      { kind: 'exit', x: 39.5, y: 1, checks: [{ date: dateStr(1), status: 'ok' }] },
+    ]);
+    // 手动加入两具灭火器：干粉 11 年（报废）、CO2 6 年未试压（试压逾期）
+    floor.facilities.push({
+      id: 'ext-scrap', kind: 'extinguisher', x: 10000, y: 1000, code: '1F-EX-10',
+      manufactureDate: yearsAgo(11), spec: { extType: 'dry_powder', weightKg: 4 }, checks: [],
+    });
+    floor.facilities.push({
+      id: 'ext-hydro', kind: 'extinguisher', x: 20000, y: 1000, code: '1F-EX-11',
+      manufactureDate: yearsAgo(6), spec: { extType: 'co2', weightKg: 2 }, checks: [],
+    });
+    const r = validateFloor(floor, rules);
+    const scrapItem = r.items.find((i) => i.facilityId === 'ext-scrap');
+    const hydroItem = r.items.find((i) => i.facilityId === 'ext-hydro');
+    expect(scrapItem?.type).toBe('LIFE_SCRAP_OVERDUE');
+    expect(scrapItem?.severity).toBe('error');
+    expect(scrapItem?.message).toContain('换新');
+    expect(hydroItem?.type).toBe('LIFE_HYDRO_OVERDUE');
+    expect(hydroItem?.severity).toBe('error');
+    expect(hydroItem?.message).toContain('送检');
+    expect(r.pass).toBe(false);
+  });
+
+  it('L9 缺出厂日期仅警告，不阻断合规；非灭火器不产生年限项', () => {
+    const { floor, rules } = mkFloor([mkRoom('走道', 'corridor', rect(0, 0, 41, 2))], [
+      { kind: 'exit', x: 0.5, y: 1, checks: [{ date: dateStr(1), status: 'ok' }] },
+      { kind: 'exit', x: 40.5, y: 1, checks: [{ date: dateStr(1), status: 'ok' }] },
+      { kind: 'hydrant', x: 15, y: 1, checks: [{ date: dateStr(1), status: 'ok' }] },
+      { kind: 'extinguisher', x: 13, y: 1, checks: [{ date: dateStr(1), status: 'ok' }] },
+      { kind: 'extinguisher', x: 28, y: 1, checks: [{ date: dateStr(1), status: 'ok' }] },
+    ]);
+    floor.facilities.push({
+      id: 'ext-nodate', kind: 'extinguisher', x: 5000, y: 1000, code: '1F-EX-20',
+      spec: { extType: 'dry_powder', weightKg: 4 }, checks: [{ date: dateStr(1), status: 'ok' }],
+    });
+    // 参与覆盖的两具灭火器为正常在役（出厂 1 年），只应有 ext-nodate 一条年限警告
+    for (const f of floor.facilities) {
+      if (f.kind === 'extinguisher' && f.id !== 'ext-nodate') {
+        f.manufactureDate = yearsAgo(1);
+        f.spec = { extType: 'dry_powder', weightKg: 4 };
+      }
+    }
+    const r = validateFloor(floor, rules);
+    const noDate = r.items.find((i) => i.facilityId === 'ext-nodate')!;
+    expect(noDate.type).toBe('LIFE_NO_MFG_DATE');
+    expect(noDate.severity).toBe('warning');
+    // 除缺日期提示外，不产生任何试压/报废到期项
+    const lifeItems = r.items.filter((i) => i.type.startsWith('LIFE_') && i.type !== 'LIFE_NO_MFG_DATE');
+    expect(lifeItems).toHaveLength(0);
+    expect(r.pass).toBe(true); // 警告不阻断
+  });
+});

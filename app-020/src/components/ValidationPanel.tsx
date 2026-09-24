@@ -10,6 +10,11 @@ const TYPE_LABELS: Record<string, string> = {
   CHECK_OVERDUE: '检查过期',
   CHECK_MISSING: '缺检查记录',
   FACILITY_DEFECT: '设施缺陷',
+  LIFE_SCRAP_OVERDUE: '已到报废年限',
+  LIFE_SCRAP_SOON: '报废临近',
+  LIFE_HYDRO_OVERDUE: '水压试验逾期',
+  LIFE_HYDRO_SOON: '水压试验临近',
+  LIFE_NO_MFG_DATE: '缺出厂日期',
   NO_DOOR: '房间无门',
 };
 

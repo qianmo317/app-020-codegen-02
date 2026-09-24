@@ -17,7 +17,8 @@ import {
   bboxOf,
 } from './geometry';
 import { buildCorridorGraph, type DoorInput } from './graph';
-import { CHECK_INTERVAL_DAYS, OCCUPANCY_DENSITY_M2_PER_PERSON } from '../rules/defaults';
+import { CHECK_INTERVAL_DAYS, OCCUPANCY_DENSITY_M2_PER_PERSON, LIFE_LEAD_DAYS } from '../rules/defaults';
+import { extinguisherLife } from './maintenance';
 
 const TRAVEL_STEP_MM = 250; // 走道栅格 0.25m，保证与手工沿路径测量误差 < 0.5m
 const ROOM_STEP_MM = 500; // 房间内部采样 0.5m
@@ -334,7 +335,7 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
     });
   }
 
-  // 检查记录
+  // 检查记录 + 灭火器年限（水压试验 / 报废）
   for (const f of floor.facilities) {
     const info = checkDueInfo(f, now);
     if (info.defect) {
@@ -361,6 +362,53 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
         point: { x: f.x, y: f.y },
         message: `${f.code} 检查已过期（应检日期 ${info.dueDate}）`,
       });
+    }
+
+    if (f.kind === 'extinguisher') {
+      const life = extinguisherLife(f, now, LIFE_LEAD_DAYS);
+      if (life && !life.basisDate) {
+        items.push({
+          severity: 'warning',
+          type: 'LIFE_NO_MFG_DATE',
+          facilityId: f.id,
+          point: { x: f.x, y: f.y },
+          message: `${f.code} 未登记出厂日期，无法判定水压试验/报废年限`,
+        });
+      } else if (life) {
+        if (life.scrapOverdue) {
+          items.push({
+            severity: 'error',
+            type: 'LIFE_SCRAP_OVERDUE',
+            facilityId: f.id,
+            point: { x: f.x, y: f.y },
+            message: `${f.code} 已到 ${life.scrapYears} 年报废年限（应于 ${life.scrapDate} 报废），须换新`,
+          });
+        } else if (life.scrapSoon) {
+          items.push({
+            severity: 'warning',
+            type: 'LIFE_SCRAP_SOON',
+            facilityId: f.id,
+            point: { x: f.x, y: f.y },
+            message: `${f.code} 将于 ${life.scrapDate} 到 ${life.scrapYears} 年报废年限，提前安排换新`,
+          });
+        } else if (life.hydroOverdue) {
+          items.push({
+            severity: 'error',
+            type: 'LIFE_HYDRO_OVERDUE',
+            facilityId: f.id,
+            point: { x: f.x, y: f.y },
+            message: `${f.code} 水压试验已到期（应于 ${life.hydroDueDate} 前送检），须送检`,
+          });
+        } else if (life.hydroSoon) {
+          items.push({
+            severity: 'warning',
+            type: 'LIFE_HYDRO_SOON',
+            facilityId: f.id,
+            point: { x: f.x, y: f.y },
+            message: `${f.code} 将于 ${life.hydroDueDate} 到水压试验日期，请提前送检`,
+          });
+        }
+      }
     }
   }
 

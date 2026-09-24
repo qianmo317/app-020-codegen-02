@@ -22,10 +22,48 @@ export type FacilityKind =
 
 export type CheckStatus = 'ok' | 'low_pressure' | 'expired' | 'damaged' | 'missing';
 
+/** 外观检查结论 */
+export type AppearanceStatus = 'intact' | 'rust' | 'deformed' | 'label_lost' | 'damaged';
+
+/** 铅封（保险销封签）状态 */
+export type SealStatus = 'intact' | 'broken' | 'missing';
+
 export type CheckRecord = {
   date: string; // YYYY-MM-DD
   status: CheckStatus;
+  pressureMpa?: number; // 压力表读数（MPa），无压力表的设施不填
+  appearance?: AppearanceStatus;
+  seal?: SealStatus;
   photoKey?: string; // IndexedDB key，照片仅存本地
+  note?: string;
+};
+
+/** 维保作业类型：日检 / 维修 / 水压试验（送检） / 再充装 / 换新 */
+export type ServiceType = 'maintenance' | 'hydro_test' | 'recharge' | 'replacement';
+
+/** 更换的配件（留下配件号，履历可追溯） */
+export type ReplacedPart = {
+  name: string; // 配件名称：压力表 / 喷管 / 瓶头阀 …
+  partNo?: string; // 配件号 / 型号
+  qty?: number;
+};
+
+export type ServiceCost = {
+  material: number; // 材料（换新时含整具购置费）
+  labor: number; // 人工
+  transport: number; // 运输（送检往返等）
+};
+
+export type ServiceRecord = {
+  id: string;
+  date: string; // YYYY-MM-DD
+  type: ServiceType;
+  cost: ServiceCost;
+  parts?: ReplacedPart[];
+  vendor?: string; // 承修 / 送检单位
+  reportNo?: string; // 水压试验报告号 / 合格证书号等
+  /** 换新时新具的出厂日期 —— 此后水压试验/报废年限从新具重新起算 */
+  newManufactureDate?: string;
   note?: string;
 };
 
@@ -35,11 +73,14 @@ export type Facility = {
   x: number; // mm
   y: number; // mm
   code: string; // 楼层-类型-序号，如 3F-EX-01
+  manufactureDate?: string; // 出厂日期 YYYY-MM-DD（灭火器年限计算起点）
   spec?: {
     extType?: 'dry_powder' | 'co2' | 'water';
     weightKg?: number;
   };
   checks: CheckRecord[];
+  /** 维修 / 送检 / 换新履历（含费用与更换配件号） */
+  services?: ServiceRecord[];
 };
 
 export type Underlay = {
@@ -61,6 +102,8 @@ export type Floor = {
   rooms: Room[];
   facilities: Facility[];
   exits: string[]; // kind === 'exit' 的设施 id
+  /** 账面在册数量（按类型），用于与图上实布数量对账；未登记的类型不参与对账 */
+  expectedCounts?: Partial<Record<FacilityKind, number>>;
   underlay?: Underlay;
   version: number; // 每次编辑 +1，用于触发校验
   lastValidation?: ValidationResult;
@@ -144,4 +187,33 @@ export const USAGE_LABELS: Record<RoomUsage, string> = {
   ward: '病房',
   corridor: '走道',
   other: '其他',
+};
+
+export const APPEARANCE_LABELS: Record<AppearanceStatus, string> = {
+  intact: '完好',
+  rust: '锈蚀',
+  deformed: '变形',
+  label_lost: '标识脱落',
+  damaged: '破损',
+};
+
+export const SEAL_LABELS: Record<SealStatus, string> = {
+  intact: '完好',
+  broken: '已拆封',
+  missing: '缺失',
+};
+
+export const SERVICE_TYPE_LABELS: Record<ServiceType, string> = {
+  maintenance: '维修',
+  hydro_test: '水压试验',
+  recharge: '再充装',
+  replacement: '换新',
+};
+
+export const CHECK_STATUS_LABELS: Record<CheckStatus, string> = {
+  ok: '正常',
+  low_pressure: '压力不足',
+  expired: '过期',
+  damaged: '损坏',
+  missing: '缺失',
 };

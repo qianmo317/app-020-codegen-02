@@ -133,9 +133,27 @@ input, select {
 .dot.warning { background: var(--amber); }
 .spinner { color: var(--blue); font-weight: 400; font-size: 12px; }
 
-.checks { max-height: 180px; overflow-y: auto; }
-.checkrow { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 0; border-bottom: 1px dashed var(--line); }
+.checks { max-height: 220px; overflow-y: auto; }
+.checkrow { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 0; border-bottom: 1px dashed var(--line); flex-wrap: wrap; }
 .thumb { width: 44px; height: 33px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line); }
+
+/* 维保账 */
+.act-hydro { background: #e3f0fd; color: #1357a6; }
+.act-replace { background: #fdecec; color: var(--red); }
+.act-repair { background: #fdeeea; color: #bf4a25; }
+.svc-maintenance { background: #fdeeea; color: #bf4a25; }
+.svc-hydro_test { background: #e3f0fd; color: #1357a6; }
+.svc-recharge { background: #f0ecfd; color: #5b3aa6; }
+.svc-replacement { background: #fdecec; color: var(--red); }
+.tl-service { background: #fafbfc; border-radius: 4px; padding-left: 4px; }
+.lifecard {
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; margin: 6px 0;
+  font-size: 12px; display: flex; flex-direction: column; gap: 3px;
+}
+.lifecard .badge { margin-left: 6px; }
+.life-ok { background: #f4faf4; border-color: #cfe3cf; }
+.life-soon { background: #fffaf0; border-color: #ecd7a8; }
+.life-bad { background: #fdf3f3; border-color: #e6b0b0; }
 
 /* 竖向疏散 */
 .exitrow { display: flex; align-items: center; gap: 10px; margin: 8px 0; }

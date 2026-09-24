@@ -69,3 +69,25 @@ export const CHECK_INTERVAL_DAYS: Record<string, number> = {
   exit: 180,
   sprinkler: 180,
 };
+
+/**
+ * 灭火器寿命规则（天）：
+ * - 报废年限：干粉/二氧化碳 10 年，水基（清水/泡沫）6 年；
+ * - 水压试验周期：干粉、洁净气体 5 年（干粉灭火器维修后每 2 年一次水压试验的常见做法取 2 年的
+ *   从严口径），水基 1 年，二氧化碳 5 年。
+ * 依据：GB 50444-2008《建筑灭火器配置验收及检查规范》、GA 95-2015《灭火器维修》。
+ * 数值为参考默认值，可按当地监管要求在本文件调整。
+ */
+export type ExtinguisherLifeRule = {
+  scrapYears: number;
+  hydroIntervalYears: number;
+};
+
+export const EXTINGUISHER_LIFE: Record<'dry_powder' | 'co2' | 'water', ExtinguisherLifeRule> = {
+  dry_powder: { scrapYears: 10, hydroIntervalYears: 2 },
+  co2: { scrapYears: 10, hydroIntervalYears: 5 },
+  water: { scrapYears: 6, hydroIntervalYears: 1 },
+};
+
+/** 到期提前量（天）：距水压试验/报废期限在此窗口内即列入待办 */
+export const LIFE_LEAD_DAYS = 30;
