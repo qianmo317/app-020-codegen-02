@@ -3,6 +3,7 @@ import type { Pt } from '../model';
 import { FACILITY_LABELS, USAGE_LABELS } from '../model';
 import { bboxOf, niceScaleBarM } from '../lib/geometry';
 import { checkDueInfo } from '../lib/engine';
+import { extinguisherLifecycle } from '../lib/serviceLife';
 import { useStore, setMark } from '../store/store';
 import { floorLabel } from '../store/id';
 import { Link } from '../router';
@@ -65,10 +66,12 @@ export function PrintPage({ floorId }: { floorId: string }) {
   const result = floor.lastValidation;
   const barM = niceScaleBarM(80 / (scaleInfo || 0.05) / 1000);
 
-  // 整改清单：不合规项 + 过期/缺失检查
+  // 整改/待办清单：不合规项 + 过期/缺失检查 + 灭火器待送检/待换新
   const overdueFacs = floor.facilities.filter((f) => {
+    if (f.retiredDate) return false;
     const info = checkDueInfo(f, Date.now());
-    return info.overdue || info.missing || info.defect;
+    if (info.overdue || info.missing || info.defect) return true;
+    return f.kind === 'extinguisher' && extinguisherLifecycle(f).todo;
   });
 
   const ledgerCsv = () => {
@@ -267,11 +270,15 @@ export function PrintPage({ floorId }: { floorId: string }) {
             </li>
           ))}
           {overdueFacs.map((f) => {
-            const already = result?.items.some((i) => i.facilityId === f.id && (i.type === 'CHECK_OVERDUE' || i.type === 'CHECK_MISSING' || i.type === 'FACILITY_DEFECT'));
+            const already = result?.items.some((i) => i.facilityId === f.id && (
+              i.type === 'CHECK_OVERDUE' || i.type === 'CHECK_MISSING' || i.type === 'FACILITY_DEFECT'
+              || i.type === 'EXTINGUISHER_HYDRO' || i.type === 'EXTINGUISHER_SCRAP'
+            ));
             if (already) return null;
+            const life = f.kind === 'extinguisher' ? extinguisherLifecycle(f) : null;
             return (
               <li key={f.id} className="warning">
-                [警告] {f.code} 检查记录过期/缺失
+                [警告] {f.code} {life?.todo ? life.message : '检查记录过期/缺失'}
               </li>
             );
           })}

@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Facility, Pt, Room, RoomUsage } from '../model';
 import { USAGE_LABELS, FACILITY_LABELS } from '../model';
-import { addRoom, addFacility, deleteFacility, deleteRoom, moveFacility, moveRoom, updateRoom, updateFacility, setUnderlay, setLastValidation, useStore, addCheck, deleteCheck } from '../store/store';
-import { floorLabel } from '../store/id';
+import { addRoom, addFacility, deleteFacility, deleteRoom, moveFacility, moveRoom, updateRoom, setUnderlay, setLastValidation, useStore } from '../store/store';
+import { floorLabel, uid } from '../store/id';
 import { getBlob, putBlob, compressImage } from '../store/db';
-import { uid } from '../store/id';
 import { bboxOf } from '../lib/geometry';
 import { computeCoverage, validateFloor } from '../lib/engine';
 import { FloorPlan, mmFromEvent, wheelZoom, type DragState, type Selection, type Tool, type View } from '../components/FloorPlan';
 import { FacilityGlyph, USAGE_FILLS } from '../components/symbols';
+import { FacilityInspector } from '../components/FacilityInspector';
 
 import { ValidationPanel } from '../components/ValidationPanel';
 import { Link } from '../router';
@@ -418,105 +418,3 @@ export function FloorEditor({ floorId }: Props) {
   );
 }
 
-function FacilityInspector({ floorId, fac, onDelete }: { floorId: string; fac: Facility; onDelete: () => void }) {
-  const [note, setNote] = useState('');
-  const [photoUrls, setPhotoUrls] = useState<Record<number, string>>({});
-  const photoInput = useRef<HTMLInputElement | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const urls: Record<number, string> = {};
-    Promise.all(
-      fac.checks.map(async (c, i) => {
-        if (!c.photoKey) return;
-        const blob = await getBlob(c.photoKey);
-        if (blob) urls[i] = URL.createObjectURL(blob);
-      }),
-    ).then(() => {
-      if (!cancelled) setPhotoUrls(urls);
-    });
-    return () => {
-      cancelled = true;
-      Object.values(urls).forEach((u) => URL.revokeObjectURL(u));
-    };
-  }, [fac.checks]);
-
-  const today = new Date().toISOString().slice(0, 10);
-  const [date, setDate] = useState(today);
-  const [status, setStatus] = useState<'ok' | 'low_pressure' | 'expired' | 'damaged' | 'missing'>('ok');
-
-  const submitCheck = async () => {
-    let photoKey: string | undefined;
-    const file = photoInput.current?.files?.[0];
-    if (file) {
-      const { blob } = await compressImage(file, 1600);
-      photoKey = `photo/${uid()}`;
-      await putBlob(photoKey, blob);
-    }
-    addCheck(floorId, fac.id, { date, status, note: note || undefined, photoKey });
-    setNote('');
-    if (photoInput.current) photoInput.current.value = '';
-  };
-
-  return (
-    <section>
-      <h4>设施 · {fac.code}</h4>
-      <p className="hint">坐标 {(fac.x / 1000).toFixed(1)}m, {(fac.y / 1000).toFixed(1)}m</p>
-      {fac.kind === 'extinguisher' && (
-        <>
-          <label className="row">类型
-            <select
-              value={fac.spec?.extType ?? 'dry_powder'}
-              onChange={(e) => updateFacility(floorId, fac.id, { spec: { ...fac.spec, extType: e.target.value as 'dry_powder' | 'co2' | 'water' } })}
-            >
-              <option value="dry_powder">干粉</option>
-              <option value="co2">二氧化碳</option>
-              <option value="water">水基</option>
-            </select>
-          </label>
-          <label className="row">规格 (kg)
-            <input
-              type="number" min={0}
-              value={fac.spec?.weightKg ?? ''}
-              onChange={(e) => updateFacility(floorId, fac.id, { spec: { ...fac.spec, weightKg: Number(e.target.value) } })}
-            />
-          </label>
-        </>
-      )}
-      <h4>检查记录</h4>
-      <div className="checks">
-        {[...fac.checks]
-          .sort((a, b) => b.date.localeCompare(a.date))
-          .map((c) => {
-            const realIdx = fac.checks.indexOf(c);
-            return (
-              <div key={realIdx} className="checkrow">
-                <span>{c.date}</span>
-                <span className={`badge st-${c.status}`}>{c.status}</span>
-                {c.note && <span className="hint">{c.note}</span>}
-                {photoUrls[realIdx] && <img className="thumb" src={photoUrls[realIdx]} alt="检查照片" />}
-                <button className="ghost" onClick={() => deleteCheck(floorId, fac.id, realIdx)}>删</button>
-              </div>
-            );
-          })}
-        {!fac.checks.length && <p className="hint">暂无记录</p>}
-      </div>
-      <div className="stack">
-        <label className="row">日期 <input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
-        <label className="row">状态
-          <select value={status} onChange={(e) => setStatus(e.target.value as typeof status)}>
-            <option value="ok">正常</option>
-            <option value="low_pressure">压力不足</option>
-            <option value="expired">过期</option>
-            <option value="damaged">损坏</option>
-            <option value="missing">缺失</option>
-          </select>
-        </label>
-        <label className="row">备注 <input value={note} onChange={(e) => setNote(e.target.value)} /></label>
-        <label className="row">照片 <input ref={photoInput} type="file" accept="image/*" /></label>
-        <button onClick={submitCheck}>登记检查</button>
-      </div>
-      <button className="danger" onClick={onDelete}>删除设施</button>
-    </section>
-  );
-}

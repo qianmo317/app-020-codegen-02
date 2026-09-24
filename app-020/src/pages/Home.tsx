@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { addBuilding, deleteBuilding, loadDemo, useStore } from '../store/store';
 import { Link } from '../router';
-import type { BuildingKind } from '../model';
+import type { BuildingKind, Floor } from '../model';
+import { collectTodos } from '../lib/maintenance';
 
 const KIND_LABELS: Record<BuildingKind, string> = {
   office: '办公楼',
@@ -44,10 +45,8 @@ export function Home() {
         {buildings.map((b) => {
           const bfs = b.floors.map((id) => floors[id]).filter(Boolean);
           const errors = bfs.reduce((s, f) => s + (f.lastValidation?.items.filter((i) => i.severity === 'error').length ?? 0), 0);
-          const overdue = bfs.reduce(
-            (s, f) => s + (f.lastValidation?.items.filter((i) => i.type === 'CHECK_OVERDUE' || i.type === 'CHECK_MISSING').length ?? 0),
-            0,
-          );
+          const floorMap: Record<string, Floor> = Object.fromEntries(bfs.map((f) => [f.id, f]));
+          const todoCount = collectTodos([b], floorMap).length;
           return (
             <div className="card" key={b.id}>
               <div className="cardhead">
@@ -57,7 +56,7 @@ export function Home() {
               <div className="cardmeta">
                 {bfs.length} 个楼层 ·
                 <span className={errors > 0 ? 'bad' : 'good'}> 超限项 {errors}</span> ·
-                <span className={overdue > 0 ? 'warn' : ''}> 过期/缺检 {overdue}</span>
+                <span className={todoCount > 0 ? 'warn' : ''}> 维保待办 {todoCount}</span>
               </div>
               <div className="cardactions">
                 <Link className="btn" to={`/building/${b.id}`}>打开</Link>

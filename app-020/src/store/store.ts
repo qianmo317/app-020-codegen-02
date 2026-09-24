@@ -10,6 +10,7 @@ import type {
   Room,
   RoomUsage,
   RuleSet,
+  ServiceRecord,
   ValidationResult,
 } from '../model';
 import { DEFAULT_RULES } from '../rules/defaults';
@@ -33,6 +34,13 @@ function loadState(): AppState {
       const s = JSON.parse(raw) as Partial<AppState>;
       // 缺失的节用默认值补齐（如旧版本数据没有 rules/marks），而不是整体丢弃用户数据
       if (s && Array.isArray(s.buildings) && s.floors) {
+        // 旧版本设施没有 services 字段、楼层没有 ledgerCounts，就地补齐
+        for (const f of Object.values(s.floors)) {
+          if (!f) continue;
+          for (const fac of f.facilities) {
+            if (!Array.isArray(fac.services)) fac.services = [];
+          }
+        }
         return {
           buildings: s.buildings,
           floors: s.floors,
@@ -205,7 +213,7 @@ export function moveRoom(floorId: string, roomId: string, dx: number, dy: number
 export function addFacility(floorId: string, kind: FacilityKind, x: number, y: number): string {
   const id = uid();
   updateFloor(floorId, (f) => {
-    const fac: Facility = { id, kind, x, y, code: nextCode(f, kind), checks: [] };
+    const fac: Facility = { id, kind, x, y, code: nextCode(f, kind), checks: [], services: [] };
     if (kind === 'extinguisher') fac.spec = { extType: 'dry_powder', weightKg: 4 };
     f.version++;
     f.facilities.push(fac);
@@ -225,11 +233,17 @@ export function moveFacility(floorId: string, facilityId: string, x: number, y: 
   });
 }
 
-export function updateFacility(floorId: string, facilityId: string, patch: Partial<Pick<Facility, 'spec'>>) {
+export function updateFacility(
+  floorId: string,
+  facilityId: string,
+  patch: Partial<Pick<Facility, 'spec' | 'manufactureDate' | 'retiredDate'>>,
+) {
   updateFloor(floorId, (f) => {
     const fac = f.facilities.find((x) => x.id === facilityId);
-    if (fac && patch.spec) {
-      fac.spec = patch.spec;
+    if (fac) {
+      if (patch.spec) fac.spec = patch.spec;
+      if ('manufactureDate' in patch) fac.manufactureDate = patch.manufactureDate;
+      if ('retiredDate' in patch) fac.retiredDate = patch.retiredDate;
       f.version++;
     }
   });
@@ -260,6 +274,49 @@ export function deleteCheck(floorId: string, facilityId: string, index: number) 
       fac.checks.splice(index, 1);
       f.version++;
     }
+  });
+}
+
+// ---------- 维保（送检 / 维修 / 换新） ----------
+
+/** 登记一条维保记录；换新（replace）时同时写入报废日期 */
+export function addService(floorId: string, facilityId: string, rec: Omit<ServiceRecord, 'id'>): string {
+  const id = uid();
+  updateFloor(floorId, (f) => {
+    const fac = f.facilities.find((x) => x.id === facilityId);
+    if (fac) {
+      if (!Array.isArray(fac.services)) fac.services = [];
+      fac.services.push({ ...rec, id });
+      if (rec.kind === 'replace') fac.retiredDate = rec.date;
+      f.version++;
+    }
+  });
+  return id;
+}
+
+export function deleteService(floorId: string, facilityId: string, serviceId: string) {
+  updateFloor(floorId, (f) => {
+    const fac = f.facilities.find((x) => x.id === facilityId);
+    if (fac) {
+      const removed = fac.services.find((x) => x.id === serviceId);
+      fac.services = fac.services.filter((x) => x.id !== serviceId);
+      // 删掉换新记录则同步解除退役标记（除非另有更晚的换新记录）
+      if (removed?.kind === 'replace') {
+        const lastReplace = fac.services.filter((x) => x.kind === 'replace').sort((a, b2) => b2.date.localeCompare(a.date))[0];
+        fac.retiredDate = lastReplace?.date;
+      }
+      f.version++;
+    }
+  });
+}
+
+/** 登记/修改某楼层某类设施的账面盘点数；清空（null）视为不参与对账 */
+export function setLedgerCount(floorId: string, kind: FacilityKind, count: number | null) {
+  updateFloor(floorId, (f) => {
+    f.ledgerCounts = { ...(f.ledgerCounts ?? {}) };
+    if (count == null || Number.isNaN(count)) delete f.ledgerCounts[kind];
+    else f.ledgerCounts[kind] = Math.max(0, Math.round(count));
+    f.version++;
   });
 }
 
@@ -337,14 +394,52 @@ export function loadDemo(): string {
     }
     const facilities: Facility[] = [];
     const dateStr = (daysAgo: number) => new Date(Date.now() - daysAgo * 86400000).toISOString().slice(0, 10);
-    const mkF = (kind: FacilityKind, x: number, y: number, code: string, checks: Facility['checks'] = [], spec?: Facility['spec']) => {
-      facilities.push({ id: uid(), kind, x: x * M, y: y * M, code, checks, spec });
+    const yearStr = (yearsAgo: number) => {
+      const d = new Date();
+      d.setFullYear(d.getFullYear() - yearsAgo);
+      return d.toISOString().slice(0, 10);
+    };
+    const mkF = (
+      kind: FacilityKind,
+      x: number,
+      y: number,
+      code: string,
+      checks: Facility['checks'] = [],
+      spec?: Facility['spec'],
+      extra?: Partial<Pick<Facility, 'manufactureDate' | 'services' | 'retiredDate'>>,
+    ) => {
+      facilities.push({ id: uid(), kind, x: x * M, y: y * M, code, checks, spec, services: [], ...extra });
     };
     mkF('exit', 0.5, 1, '1F-EXIT-01');
     mkF('exit', 40.5, 1, '1F-EXIT-02');
-    mkF('extinguisher', 20.5, 1, '1F-EX-01', [{ date: dateStr(20), status: 'ok' }], { extType: 'dry_powder', weightKg: 4 });
-    mkF('extinguisher', 4, 5, '1F-EX-02', [{ date: dateStr(45), status: 'ok' }], { extType: 'dry_powder', weightKg: 4 });
-    mkF('extinguisher', 36, 5, '1F-EX-03', [], { extType: 'co2', weightKg: 2 });
+    mkF(
+      'extinguisher', 20.5, 1, '1F-EX-01',
+      [{ date: dateStr(20), status: 'ok', pressureMpa: 1.2, pressureZone: 'green', appearance: 'intact', seal: 'intact' }],
+      { extType: 'dry_powder', weightKg: 4 },
+      {
+        manufactureDate: yearStr(3),
+        services: [
+          {
+            id: uid(), date: yearStr(1), kind: 'hydro_test', hydroResult: 'pass', vendor: '市消防器材维修站',
+            parts: [{ partNo: 'YB-2024-01', name: '压力表', qty: 1 }],
+            cost: { material: 25, labor: 40, transport: 15 }, note: '首次送检合格',
+          },
+        ],
+      },
+    );
+    // 出厂即将满 10 年（约 20 天后到期）：出现在「待办-换新」提前预警里
+    mkF(
+      'extinguisher', 4, 5, '1F-EX-02',
+      [{ date: dateStr(45), status: 'low_pressure', pressureMpa: 0.4, pressureZone: 'red', appearance: 'rust', seal: 'broken' }],
+      { extType: 'dry_powder', weightKg: 4 },
+      { manufactureDate: (() => { const d = new Date(); d.setFullYear(d.getFullYear() - 10); d.setDate(d.getDate() + 20); return d.toISOString().slice(0, 10); })() },
+    );
+    // 二氧化碳 11 年：距 12 年报废期 1 年，且首次水压试验（5 年）早过、无送检记录 → 待办送检
+    mkF(
+      'extinguisher', 36, 5, '1F-EX-03', [],
+      { extType: 'co2', weightKg: 2 },
+      { manufactureDate: yearStr(11) },
+    );
     mkF('hydrant', 10, 1, '1F-HY-01', [{ date: dateStr(10), status: 'ok' }]);
     mkF('exit_sign', 1, 1.7, '1F-ES-01', [{ date: dateStr(15), status: 'ok' }]);
     mkF('exit_sign', 40, 1.7, '1F-ES-02', [{ date: dateStr(15), status: 'ok' }]);
@@ -358,6 +453,8 @@ export function loadDemo(): string {
       rooms,
       facilities,
       exits,
+      // 账实对账演示：账上灭火器 4 具、图上 3 具 → 差 1 具
+      ledgerCounts: { extinguisher: 4, hydrant: 1, exit: 2, exit_sign: 2, emergency_light: 1 },
       version: 0,
     };
   });

@@ -38,7 +38,9 @@ body {
 }
 
 .page { padding: 18px 22px; max-width: 1200px; }
+.page.wide { max-width: 1500px; }
 .hint { color: var(--muted); font-size: 12px; margin: 6px 0; }
+.nowrap { white-space: nowrap; }
 .toolbar { display: flex; gap: 8px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
 .bad { color: var(--red); font-weight: 600; }
 .good { color: var(--green); }
@@ -133,9 +135,21 @@ input, select {
 .dot.warning { background: var(--amber); }
 .spinner { color: var(--blue); font-weight: 400; font-size: 12px; }
 
-.checks { max-height: 180px; overflow-y: auto; }
+.checks { max-height: 260px; overflow-y: auto; }
 .checkrow { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 0; border-bottom: 1px dashed var(--line); }
 .thumb { width: 44px; height: 33px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line); }
+
+/* 维保账 */
+.serviceform { border-top: 1px dashed var(--line); padding-top: 8px; }
+.checkrow.ev-manufacture { opacity: 0.85; }
+.checkrow.ev-service .badge { background: #e7f0fd; color: #1957a8; }
+.checkrow.ev-retire .badge { background: #eceff3; color: #44515e; }
+.detail-row td { background: #f7f9fc; padding: 10px 14px; }
+.historybox h4 { color: var(--ink); margin: 2px 0 6px; }
+.subtable th, .subtable td { padding: 5px 8px; font-size: 12px; }
+.tag { background: #eef3fb; color: #33619e; border-radius: 4px; padding: 2px 10px; font-size: 12px; }
+.tag.st-ok { background: #e5f3e6; color: var(--green); }
+.table .nowrap { white-space: nowrap; }
 
 /* 竖向疏散 */
 .exitrow { display: flex; align-items: center; gap: 10px; margin: 8px 0; }

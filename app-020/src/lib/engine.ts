@@ -18,6 +18,7 @@ import {
 } from './geometry';
 import { buildCorridorGraph, type DoorInput } from './graph';
 import { CHECK_INTERVAL_DAYS, OCCUPANCY_DENSITY_M2_PER_PERSON } from '../rules/defaults';
+import { extinguisherLifecycle } from './serviceLife';
 
 const TRAVEL_STEP_MM = 250; // 走道栅格 0.25m，保证与手工沿路径测量误差 < 0.5m
 const ROOM_STEP_MM = 500; // 房间内部采样 0.5m
@@ -334,8 +335,29 @@ export function validateFloor(floor: Floor, rules: RuleSet, now: number = Date.n
     });
   }
 
-  // 检查记录
+  // 检查记录 + 灭火器水压试验/报废年限
   for (const f of floor.facilities) {
+    // 已换新/报废处置的设施不再安排巡检与寿命待办（图上点位保留，但账上已结案）
+    if (f.retiredDate) continue;
+
+    // 灭火器生命周期（依据出厂日期与送检记录）：到报废年限/送检不合格 = error（必须换新）；
+    // 到水压试验期限 = warning（送检）；提前 30 天预警也列出
+    if (f.kind === 'extinguisher') {
+      const life = extinguisherLifecycle(f, now);
+      if (life.todo && life.action) {
+        const scrap = life.action === 'replace';
+        items.push({
+          severity: scrap && life.due ? 'error' : 'warning',
+          type: scrap ? 'EXTINGUISHER_SCRAP' : 'EXTINGUISHER_HYDRO',
+          facilityId: f.id,
+          point: { x: f.x, y: f.y },
+          value: life.daysLeft ?? undefined,
+          limit: 0,
+          message: `${f.code} ${life.message}（待办：${scrap ? '换新' : '送检'}${life.upcoming ? '，提前预警' : ''}）`,
+        });
+      }
+    }
+
     const info = checkDueInfo(f, now);
     if (info.defect) {
       items.push({

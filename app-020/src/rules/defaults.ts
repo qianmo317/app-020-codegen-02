@@ -69,3 +69,24 @@ export const CHECK_INTERVAL_DAYS: Record<string, number> = {
   exit: 180,
   sprinkler: 180,
 };
+
+/**
+ * 灭火器使用年限规则（依据 GA 95-2015《灭火器维修》7.1 / 附录 A，与 GB 50444-2008）：
+ * - 水压试验：出厂满 5 年做首次，此后每 2 年一次（维修后再充装也按此周期）；
+ * - 报废年限按灭火剂类型：干粉/洁净气体 10 年，二氧化碳 12 年，水基型 6 年。
+ * 到期前提前多少天列进待办。
+ */
+export const EXTINGUISHER_RULES = {
+  /** 提前预警天数（「提前列进待办」） */
+  upcomingLeadDays: 30,
+  /** 首次水压试验距出厂的年数 */
+  firstHydroYears: 5,
+  /** 两次水压试验间隔年数 */
+  hydroIntervalYears: 2,
+  /** 报废年限（年），按灭火器类型 */
+  scrapYears: {
+    dry_powder: 10,
+    co2: 12,
+    water: 6,
+  } as Record<string, number>,
+};

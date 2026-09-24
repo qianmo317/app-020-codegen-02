@@ -13,6 +13,7 @@ function floorWithCodes(level: number, codes: string[]): Floor {
     y: 0,
     code,
     checks: [],
+    services: [],
   }));
   return {
     id: 'f1',

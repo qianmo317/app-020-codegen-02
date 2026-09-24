@@ -10,6 +10,8 @@ const TYPE_LABELS: Record<string, string> = {
   CHECK_OVERDUE: '检查过期',
   CHECK_MISSING: '缺检查记录',
   FACILITY_DEFECT: '设施缺陷',
+  EXTINGUISHER_HYDRO: '到水压试验期',
+  EXTINGUISHER_SCRAP: '到报废年限',
   NO_DOOR: '房间无门',
 };
 

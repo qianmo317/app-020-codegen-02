@@ -109,3 +109,49 @@ describe('整改清单（validateFloor）', () => {
     expect(r.pass).toBe(false);
   });
 });
+
+describe('灭火器水压试验 / 报废年限（validateFloor 接入）', () => {
+  it('L8 出厂满 5 年无送检 → EXTINGUISHER_HYDRO（warning，标明送检）', () => {
+    const mfg = new Date();
+    mfg.setFullYear(mfg.getFullYear() - 6);
+    const mfgStr = mfg.toISOString().slice(0, 10);
+    const { floor, rules } = mkFloor([mkRoom('走道', 'corridor', rect(0, 0, 30, 2))], [
+      { kind: 'exit', x: 29.5, y: 1, checks: [{ date: dateStr(5), status: 'ok' }] },
+      { kind: 'extinguisher', x: 10, y: 1, spec: { extType: 'dry_powder', weightKg: 4 }, manufactureDate: mfgStr, checks: [{ date: dateStr(5), status: 'ok' }] },
+    ]);
+    const r = validateFloor(floor, rules);
+    const hydro = r.items.filter((i) => i.type === 'EXTINGUISHER_HYDRO');
+    expect(hydro.length).toBe(1);
+    expect(hydro[0].severity).toBe('warning');
+    expect(hydro[0].message).toContain('送检');
+  });
+
+  it('L9 到报废年限 → EXTINGUISHER_SCRAP（error，pass=false），到期待办 100% 在清单', () => {
+    const { floor, rules } = mkFloor([mkRoom('走道', 'corridor', rect(0, 0, 30, 2))], [
+      { kind: 'exit', x: 29.5, y: 1, checks: [{ date: dateStr(5), status: 'ok' }] },
+      { kind: 'extinguisher', x: 10, y: 1, manufactureDate: '2015-01-01', checks: [{ date: dateStr(5), status: 'ok' }] },
+      { kind: 'extinguisher', x: 20, y: 1, manufactureDate: '2024-01-01', checks: [{ date: dateStr(5), status: 'ok' }] },
+    ]);
+    const r = validateFloor(floor, rules, new Date('2026-09-01T00:00:00').getTime());
+    const scrap = r.items.filter((i) => i.type === 'EXTINGUISHER_SCRAP');
+    expect(scrap.length).toBe(1); // 只点到期的那一具，无多余
+    expect(scrap[0].severity).toBe('error');
+    expect(scrap[0].message).toContain('换新');
+    expect(r.pass).toBe(false);
+  });
+
+  it('L10 距送检期 20 天 → 提前预警进清单（仍为 warning）', () => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - 5);
+    d.setDate(d.getDate() + 20);
+    const mfgStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const { floor, rules } = mkFloor([mkRoom('走道', 'corridor', rect(0, 0, 30, 2))], [
+      { kind: 'exit', x: 29.5, y: 1, checks: [{ date: dateStr(5), status: 'ok' }] },
+      { kind: 'extinguisher', x: 10, y: 1, manufactureDate: mfgStr, checks: [{ date: dateStr(5), status: 'ok' }] },
+    ]);
+    const r = validateFloor(floor, rules);
+    const hydro = r.items.find((i) => i.type === 'EXTINGUISHER_HYDRO');
+    expect(hydro).toBeDefined();
+    expect(hydro!.message).toContain('提前预警');
+  });
+});

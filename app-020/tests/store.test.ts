@@ -19,8 +19,12 @@ import {
   addFacility,
   moveFacility,
   deleteFacility,
+  updateFacility,
   addCheck,
   deleteCheck,
+  addService,
+  deleteService,
+  setLedgerCount,
   updateRules,
   resetRules,
   setMark,
@@ -152,6 +156,57 @@ describe('设施：编号、exits 同步、拖动、检查记录', () => {
     expect(checks().map((c) => c.date)).toEqual(['2026-09-01', '2026-09-16']);
     deleteCheck(fid, xid, 0);
     expect(checks().map((c) => c.date)).toEqual(['2026-09-16']);
+  });
+});
+
+describe('维保账：出厂日期、送检/换新、账面数量', () => {
+  it('S11 新建设施带空 services；可登出厂日期', () => {
+    const xid = addFacility(fid, 'extinguisher', 20000, 1000);
+    let fac = snap().floors[fid].facilities.find((x) => x.id === xid)!;
+    expect(fac.services).toEqual([]);
+    updateFacility(fid, xid, { manufactureDate: '2020-03-10' });
+    fac = snap().floors[fid].facilities.find((x) => x.id === xid)!;
+    expect(fac.manufactureDate).toBe('2020-03-10');
+  });
+
+  it('S12 addService 记录送检（含费用与配件号）', () => {
+    const xid = addFacility(fid, 'extinguisher', 20000, 1000);
+    const sid = addService(fid, xid, {
+      date: '2026-05-01',
+      kind: 'hydro_test',
+      hydroResult: 'pass',
+      vendor: '维修站',
+      cost: { material: 25, labor: 40, transport: 15 },
+      parts: [{ partNo: 'PB-01', name: '压力表', qty: 1 }],
+    });
+    const fac = snap().floors[fid].facilities.find((x) => x.id === xid)!;
+    expect(fac.services).toHaveLength(1);
+    expect(fac.services[0].id).toBe(sid);
+    expect(fac.services[0].cost).toEqual({ material: 25, labor: 40, transport: 15 });
+    expect(fac.services[0].parts![0].partNo).toBe('PB-01');
+    expect(fac.retiredDate).toBeUndefined(); // 送检不退役
+  });
+
+  it('S13 登记换新自动写入报废日期；删除换新记录解除退役', () => {
+    const xid = addFacility(fid, 'extinguisher', 20000, 1000);
+    const sid = addService(fid, xid, {
+      date: '2026-06-01', kind: 'replace',
+      cost: { material: 500, labor: 0, transport: 0 },
+    });
+    let fac = snap().floors[fid].facilities.find((x) => x.id === xid)!;
+    expect(fac.retiredDate).toBe('2026-06-01');
+    deleteService(fid, xid, sid);
+    fac = snap().floors[fid].facilities.find((x) => x.id === xid)!;
+    expect(fac.retiredDate).toBeUndefined();
+    expect(fac.services).toHaveLength(0);
+  });
+
+  it('S14 setLedgerCount 按类型登记账面数，清空（null）删除该类型', () => {
+    setLedgerCount(fid, 'extinguisher', 4);
+    setLedgerCount(fid, 'hydrant', 2);
+    expect(snap().floors[fid].ledgerCounts).toEqual({ extinguisher: 4, hydrant: 2 });
+    setLedgerCount(fid, 'hydrant', null);
+    expect(snap().floors[fid].ledgerCounts).toEqual({ extinguisher: 4 });
   });
 });
 
